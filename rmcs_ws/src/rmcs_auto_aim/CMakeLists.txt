@@ -30,7 +30,8 @@ set(EXECUTABLE_NAME ${PROJECT_NAME})
 
 # Find non-ros packages
 find_package(OpenCV 4.5 REQUIRED)
-# find_package(HikCameraSDK REQUIRED)
+find_package(HikCameraSDK REQUIRED)
+set(HikCameraSDK_LIB HikCameraSDK::HikCameraSDK)  # Adjust based on actual target name
 
 find_package(OpenVINO REQUIRED)
 set(OpenVINO_LIB openvino::runtime)

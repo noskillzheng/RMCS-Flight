@@ -3,9 +3,9 @@
 <package format="3">
   <name>rmcs_auto_aim</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>RMCS自动瞄准系统，包含装甲板检测、跟踪和射击控制</description>
   <maintainer email="paradise_c@qq.com">developer</maintainer>
-  <license>TODO: License declaration</license>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

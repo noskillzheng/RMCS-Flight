@@ -1,11 +1,11 @@
 <library path="rmcs_auto_aim">
   <class type="rmcs_auto_aim::AutoAimTest" base_class_type="rmcs_executor::Component">
-    <description>Start Fxxking test.</description>
+    <description>自动瞄准测试组件，用于调试和验证</description>
   </class>
   <class type="rmcs_auto_aim::AutoAimInitializer" base_class_type="rmcs_executor::Component">
-    <description>Start Fxxking.</description>
+    <description>初始化自动瞄准系统参数和目标配置</description>
   </class>
   <class type="rmcs_auto_aim::AutoAimController" base_class_type="rmcs_executor::Component">
-    <description>Fxxk all.</description>
+    <description>主自动瞄准控制器，协调检测、跟踪和射击</description>
   </class>
 </library>

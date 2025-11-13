@@ -31,8 +31,8 @@ public:
     void update() override {
         if (*update_count_ == 0) {
             // clang-format off
-            *whitelist_ = // If target is not included in blacklist, it will be ignored.
-                0;
+            *whitelist_ = // Whitelist bitmask: 0 means no targets are enabled (all disabled)
+                0;        // Set to non-zero to enable specific target IDs
             // clang-format on
         }
         if (robot_msg_.ready()) {

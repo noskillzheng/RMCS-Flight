@@ -7,6 +7,7 @@
 #include <chrono>
 #include <memory>
 #include <thread>
+#include <tuple>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <rclcpp/node.hpp>
@@ -31,6 +32,7 @@
 #include "parameters/profile.hpp"
 
 // Local utilities
+#include "util/armor_filter.hpp"
 #include "util/yaml_generator.hpp"
 #include "util/data_converter.hpp"
 #include "util/fps_counter.hpp"
@@ -186,8 +188,7 @@ TongjiAutoAimController::TongjiAutoAimController()
 
     // 设置相机分辨率到 Profile (用于 PnP)
     auto [width, height] = capturer_->get_width_height();
-    parameters::HikCameraProfile::set_width(width);
-    parameters::HikCameraProfile::set_height(height);
+    parameters::HikCameraProfile::set_width_height(width, height);
 
     // === 生成 Fire Controller YAML 配置 ===
     std::string fire_control_yaml = util::YamlGenerator::generateFireControlYaml(
@@ -241,15 +242,19 @@ void TongjiAutoAimController::update() {
     tf_index_.store(!tf_index_.load());
 
     // 2. 首次更新时启动视觉处理线程
-    if (*update_count_ == 0) {
-        if (!target_color_.ready()) {
-            RCLCPP_WARN(get_logger(), "target_color not ready!");
-            throw std::runtime_error("target_color not ready");
-        }
+        if (*update_count_ == 0) {
+            if (!target_color_.ready()) {
+                RCLCPP_WARN(get_logger(), "target_color not ready!");
+                throw std::runtime_error("target_color not ready");
+            }
+            if (!whitelist_.ready()) {
+                RCLCPP_WARN(get_logger(), "whitelist not ready!");
+                throw std::runtime_error("whitelist not ready");
+            }
 
-        vision_thread_ = std::thread([this]() { visionLoop(); });
-        RCLCPP_INFO(get_logger(), "Vision thread started.");
-    }
+            vision_thread_ = std::thread([this]() { visionLoop(); });
+            RCLCPP_INFO(get_logger(), "Vision thread started.");
+        }
 
     // 3. 读取视觉线程的结果 (从双缓冲)
     int read_idx = buffer_index_.load();
@@ -312,9 +317,14 @@ void TongjiAutoAimController::visionLoop() {
             auto tf = tf_buffer_[tf_index_.load()];
 
             // 3. 装甲板识别
-            auto [armors_in_image, car_id_flag] = identifier_->identify(image);
+            identifier_->SetTargetColor(*target_color_ == rmcs_msgs::RobotColor::RED);
+            auto identify_result = identifier_->identify(image);
+            auto armors_in_image_raw = std::get<0>(identify_result);
+            auto filtered = util::filterArmorsByWhitelist(armors_in_image_raw, *whitelist_);
+            auto armors_in_image = filtered.armors;
+            auto car_id_flag = filtered.car_id_flag;
 
-            if (car_id_flag == enumeration::ArmorIdFlag::None) {
+            if (!armors_in_image || car_id_flag == enumeration::ArmorIdFlag::None) {
                 state_machine_->SetLostState();
                 continue;
             }

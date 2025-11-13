@@ -2,6 +2,7 @@ devel/
 log/
 build/
 install/
+debug/
 bin/
 lib/
 msg_gen/
@@ -25,6 +26,7 @@ devel_isolated/
 # Ignore generated docs
 *.dox
 *.wikidoc
+docs/analysis/
 
 # eclipse stuff
 .project

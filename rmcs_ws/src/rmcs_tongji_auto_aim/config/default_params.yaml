@@ -1,0 +1,42 @@
+# Default parameters for rmcs_tongji_auto_aim
+# 默认参数配置文件
+
+tongji_auto_aim_controller:
+  ros__parameters:
+    # === 相机参数 / Camera Parameters ===
+    exposure_time: 5000              # 曝光时间 (微秒)
+    invert_image: false              # 是否翻转图像
+    fx: 1234.5                       # 焦距 x
+    fy: 1234.5                       # 焦距 y
+    cx: 720.0                        # 主点 x
+    cy: 540.0                        # 主点 y
+    k1: -0.12                        # 径向畸变系数 k1
+    k2: 0.08                         # 径向畸变系数 k2
+    k3: 0.0                          # 径向畸变系数 k3
+
+    # === 模型参数 / Model Parameters ===
+    model_path: "models/szu_model.onnx"  # 相对于包共享目录
+    device: "AUTO"                   # OpenVINO 设备: CPU/GPU/AUTO
+
+    # === 弹道参数 / Ballistic Parameters ===
+    shoot_velocity: 26.0             # 弹丸初速 (m/s)
+    predict_sec: 0.05                # 预测时间偏移 (秒)
+    yaw_error: 0.0                   # Yaw 轴误差补偿 (弧度)
+    pitch_error: 0.0                 # Pitch 轴误差补偿 (弧度)
+
+    # === Fire Controller 参数 (度数,用户友好) ===
+    # Fire Controller Parameters (in degrees for user convenience)
+    control_delay_s: 0.1             # 控制延迟 (秒)
+    bullet_speed: 26.0               # 弹速 (m/s), 应与 shoot_velocity 一致
+    yaw_offset_deg: 1.5              # Yaw 偏移量 (度)
+    pitch_offset_deg: -0.5           # Pitch 偏移量 (度)
+    comming_angle_deg: 60.0          # 来袭装甲板角度阈值 (度)
+    leaving_angle_deg: 20.0          # 离开装甲板角度阈值 (度)
+    auto_fire: true                  # 是否自动开火
+    first_tolerance_deg: 100.0       # 近距离射击容差 (度)
+    second_tolerance_deg: 100.0      # 远距离射击容差 (度)
+    judge_distance: 2.0              # 距离判断阈值 (米)
+
+    # === 调试参数 / Debug Parameters ===
+    debug_mode: false                # 是否启用调试模式
+    image_viewer_type: 0             # 图像查看器类型 (0=none, 1=opencv)

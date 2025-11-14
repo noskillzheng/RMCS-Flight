@@ -10,6 +10,7 @@ namespace rmcs_auto_aim::tracker {
 class IFireController {
 
 public:
+virtual ~IFireController() = default;
     [[nodiscard]] virtual std::tuple<bool, rmcs_description::OdomImu::Position>
         UpdateController(double sec, const rmcs_description::Tf& tf) = 0;
 

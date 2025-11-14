@@ -17,8 +17,6 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
-
 # Set configure_file
 set (CONFIGURE_DIR_PATH ${PROJECT_SOURCE_DIR}/src)
 # configure_file (
@@ -35,9 +33,6 @@ set(EXECUTABLE_NAME ${PROJECT_NAME})
 
 # Find non-ros packages
 find_package(OpenCV 4.5 REQUIRED)
-find_package(HikCameraSDK REQUIRED)
-set(HikCameraSDK_LIB HikCameraSDK::HikCameraSDK)  # Adjust based on actual target name
-
 find_package(OpenVINO REQUIRED)
 set(OpenVINO_LIB openvino::runtime)
 find_package(Ceres REQUIRED)
@@ -61,9 +56,15 @@ file(GLOB_RECURSE AUTO_AIM_SOURCE CONFIGURE_DEPENDS
 find_package (ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies ()
 ament_auto_add_library(${EXECUTABLE_NAME} SHARED ${AUTO_AIM_SOURCE})
+ament_target_dependencies(${EXECUTABLE_NAME} hikcamera)
 
 # Link libraries
-target_link_libraries(${EXECUTABLE_NAME} ${OpenCV_LIBS} ${HikCameraSDK_LIB} ${OpenVINO_LIB} ${Ceres_LIB} ${FFMPEG_LIBRARIES} -lpthread)
+target_link_libraries(${EXECUTABLE_NAME}
+    ${OpenCV_LIBS}
+    ${OpenVINO_LIB}
+    ${Ceres_LIB}
+    ${FFMPEG_LIBRARIES}
+    -lpthread)
 
 install(
     DIRECTORY models/

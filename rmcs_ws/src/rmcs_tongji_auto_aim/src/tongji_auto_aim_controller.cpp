@@ -363,7 +363,7 @@ void TongjiAutoAimController::visionLoop() {
             fire_controller_->UpdateGimbalPosition(gimbal_yaw);
 
             auto fire_control = fire_controller_->CalculateTarget(
-                std::chrono::duration_cast<std::chrono::seconds>(elapsed));
+                std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed));
 
             // 9. 原子写入双缓冲
             int write_idx = !buffer_index_.load();

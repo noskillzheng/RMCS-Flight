@@ -76,20 +76,22 @@ public:
     }
 
     ~AutoAimController() override {
-        for (auto& thread : threads_) {
+        run_flag_.store(false);
+        for (auto& thread : threads_)
             if (thread.joinable()) {
                 thread.join();
             }
-        }
         RCLCPP_INFO(get_logger(), "AutoAimController destroy");
     }
 
     void update() override {
 
-        tf_buffer_[!tf_index_.load()] = *tf_;
-        tf_index_.store(!tf_index_.load());
+        const int next_tf_idx = !tf_index_.load();
+        tf_buffer_[next_tf_idx] = *tf_;
+        tf_index_.store(next_tf_idx);
 
-        if (*update_count_ == 0) {
+        if (!run_flag_.load() && *update_count_ == 0) {
+            run_flag_.store(true);
             if (!target_color_.ready()) {
                 RCLCPP_WARN(get_logger(), "target_color_ not ready");
                 throw std::runtime_error("target_color_ not ready");
@@ -103,7 +105,7 @@ public:
 
                 rmcs_auto_aim::util::FPSCounter fps;
 
-                while (rclcpp::ok()) {
+                while (run_flag_.load() && rclcpp::ok()) {
 
                     auto image       = capturer_->read();
                     thread_sync_clk_ = std::chrono::steady_clock::now();
@@ -124,10 +126,10 @@ public:
                             util::math::get_yaw_from_quaternion(*armor2d_.rotation);
                     }
                     if (auto target = armor_tracker.Update(armor3d, timestamp, tf)) {
-                        armor_target_buffer_[!armor_target_index_.load()].target_ =
-                            std::move(target);
-                        armor_target_buffer_[!armor_target_index_.load()].timestamp_ = timestamp;
-                        armor_target_index_.store(!armor_target_index_.load());
+                        const int next_target_idx = !armor_target_index_.load();
+                        armor_target_buffer_[next_target_idx].target_   = std::move(target);
+                        armor_target_buffer_[next_target_idx].timestamp_ = timestamp;
+                        armor_target_index_.store(next_target_idx);
                     }
                     armor_tracker.draw_armors(tf, {0, 0, 255});
                     util::ImageViewer::show_image();
@@ -215,6 +217,7 @@ private:
     double predict_sec_;
 
     std::vector<std::thread> threads_;
+    std::atomic<bool> run_flag_{false};
     std::chrono::time_point<std::chrono::steady_clock> thread_sync_clk_;
 
     rmcs_description::Tf tf_buffer_[2];

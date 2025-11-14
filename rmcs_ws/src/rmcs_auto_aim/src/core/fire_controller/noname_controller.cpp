@@ -43,7 +43,7 @@ public:
             double max    = -1e7;
             int index     = 0;
             auto armors   = tracker_->get_armor(sec);
-            auto pos_norm = Eigen::Vector2d(position.x(), position.x()).normalized();
+            auto pos_norm = Eigen::Vector2d(position.x(), position.y()).normalized();
 
             for (int i = 0; i < 4; i++) {
 

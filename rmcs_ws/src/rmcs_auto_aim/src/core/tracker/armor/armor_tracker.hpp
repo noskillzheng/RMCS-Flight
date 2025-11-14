@@ -83,8 +83,8 @@ public:
         const rmcs_description::Tf& tf) override {
         target_.SetTracker(nullptr);
 
-        uint8_t foundCode = -1;
-        uint8_t lockCode  = -1;
+        uint8_t foundCode = 0;
+        uint8_t lockCode  = 0;
 
         last_armors1_ = car_trackers_[last_car_id_]->get_armor(0.15);
         last_update_  = timestamp;
@@ -211,20 +211,22 @@ public:
         last_armors2_ = car_trackers_[last_car_id_]->get_armor();
         nav_msgs::msg::Path path{};
         path.header.frame_id = "map_link";
-        geometry_msgs::msg::PoseStamped hero{};
-        hero.header.frame_id = "map_link";
-        geometry_msgs::msg::PoseStamped engineer{};
-        engineer.header.frame_id = "map_link";
-        geometry_msgs::msg::PoseStamped infantryIII{};
-        infantryIII.header.frame_id = "map_link";
-        geometry_msgs::msg::PoseStamped infantryIV{};
-        infantryIV.header.frame_id = "map_link";
-        geometry_msgs::msg::PoseStamped infantryV{};
-        infantryV.header.frame_id = "map_link";
-        geometry_msgs::msg::PoseStamped sentry{};
-        infantryV.header.frame_id = "map_link";
-        path.poses                = {hero, engineer, infantryIII, infantryIV, infantryV, sentry};
-        car_position_publisher_->publish(path);
+        path.header.stamp    = node_.get_clock()->now();
+        for (const auto& armor3d : last_armors2_) {
+            geometry_msgs::msg::PoseStamped pose{};
+            pose.header            = path.header;
+            pose.pose.position.x   = armor3d.position->x();
+            pose.pose.position.y   = armor3d.position->y();
+            pose.pose.position.z   = armor3d.position->z();
+            pose.pose.orientation.x = armor3d.rotation->x();
+            pose.pose.orientation.y = armor3d.rotation->y();
+            pose.pose.orientation.z = armor3d.rotation->z();
+            pose.pose.orientation.w = armor3d.rotation->w();
+            path.poses.emplace_back(std::move(pose));
+        }
+        if (!path.poses.empty()) {
+            car_position_publisher_->publish(path);
+        }
 
         std_msgs::msg::UInt8 found{};
         found.data = foundCode;

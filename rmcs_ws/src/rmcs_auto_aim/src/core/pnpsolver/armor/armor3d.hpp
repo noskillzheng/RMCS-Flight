@@ -11,6 +11,8 @@
 #pragma once
 
 #include <geometry_msgs/msg/pose.hpp>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 
 #include <rmcs_description/tf_description.hpp>
 #include <rmcs_msgs/robot_id.hpp>

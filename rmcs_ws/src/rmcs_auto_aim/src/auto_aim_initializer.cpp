@@ -31,8 +31,9 @@ public:
     void update() override {
         if (*update_count_ == 0) {
             // clang-format off
-            *whitelist_ = // Whitelist bitmask: 0 means no targets are enabled (all disabled)
-                0;        // Set to non-zero to enable specific target IDs
+            *whitelist_ = // Whitelist bitmask (Tongji semantics):
+                0;        // - bit = 0: 对应目标可攻击
+                          // - bit = 1: 屏蔽对应目标（Base 位需显式置 1 才允许攻击）
             // clang-format on
         }
         if (robot_msg_.ready()) {

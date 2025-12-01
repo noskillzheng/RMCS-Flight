@@ -1,0 +1,31 @@
+name: CI - ROS Humble Build & Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    name: build-and-test (humble)   # 给 job 起一个名字，带 humble 标签
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - name: Build Docker image (humble)
+      run: docker build -t ros-humble-ci --file ./dockerfiles/ros-humble.dockerfile .
+
+    - name: Run colcon build inside container
+      run: |
+        docker run --rm -v ${{ github.workspace }}:/ros_ws ros-humble-ci \
+        bash -c "source /opt/ros/humble/setup.sh && cd /ros_ws && colcon build"
+
+    - name: Run colcon test inside container
+      run: |
+        docker run --rm -v ${{ github.workspace }}:/ros_ws ros-humble-ci \
+        bash -c "source /opt/ros/humble/setup.sh && cd /ros_ws && colcon test && colcon test-result --verbose"

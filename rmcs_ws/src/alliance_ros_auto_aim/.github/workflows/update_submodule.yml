@@ -1,0 +1,41 @@
+name: Update Submodules
+
+on: 
+  schedule:
+    # 每天凌晨 2 点自动更新 (UTC时间)
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    
+jobs:
+  update-submodules:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0 # 获取完整历史记录
+
+      - name: Update all submodules to latest
+        run: |
+          git pull -f
+          git submodule update --remote --recursive
+          git add .
+          
+      - name: Check for changes
+        id: changes
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit and push changes
+        if: steps.changes.outputs.changes == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "Auto updated submodule references" && git push || echo "No changes to commit"
+          git push

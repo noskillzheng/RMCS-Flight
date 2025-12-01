@@ -1,0 +1,14 @@
+<library path="alliance_ros_auto_aim">
+  <class type="alliance_ros_auto_aim::AllianceHikCamera"
+         base_class_type="rmcs_executor::Component">
+    <description>Publish HikRobot frames and sync packets</description>
+  </class>
+  <class type="alliance_ros_auto_aim::AllianceInitializer"
+         base_class_type="rmcs_executor::Component">
+    <description>Configure alliance_auto_aim system</description>
+  </class>
+  <class type="alliance_ros_auto_aim::AllianceController"
+         base_class_type="rmcs_executor::Component">
+    <description>Bridge EventBus fire control outputs to RMCS gimbal interface</description>
+  </class>
+</library>

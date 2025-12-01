@@ -5,6 +5,12 @@ services:
     privileged: true
     command: >
       bash -c "
+        echo '正在配置设备权限...'
+        sudo chmod -R o+rw /dev/bus/usb 2>/dev/null || echo '注意: USB设备权限设置失败(设备可能不存在)'
+        echo '正在检查 HikCamera 环境...'
+        if [ -f /workspaces/RMCS/scripts/check_hikcamera_env.sh ]; then
+          /workspaces/RMCS/scripts/check_hikcamera_env.sh || echo '警告: HikCamera 环境检查失败，请运行宿主机修复脚本'
+        fi
         sudo chown -R ${CONTAINER_USER}:${CONTAINER_USER} ${CONTAINER_HOME}/.config
         exec bash
       "
@@ -14,9 +20,26 @@ services:
       - /run/user/1000/wayland-0:/run/user/1000/wayland-0
       - ${HOST_NVIM_DIR}:${CONTAINER_HOME}/.config/nvim/:bind
       - .:/workspaces/RMCS:bind
+      # 固定 X11 授权文件路径，避免路径不一致问题
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/tmp/.Xauthority:ro
     environment:
       - DISPLAY=${DISPLAY}
       - WAYLAND_DISPLAY=${WAYLAND_DISPLAY}
+      # 统一使用容器内的固定路径
+      - XAUTHORITY=/tmp/.Xauthority
+      # 添加标记，表示需要 X11 授权
+      - HIKCAMERA_REQUIRE_XAUTH=1
+      # 可选：强制间接渲染
+      - LIBGL_ALWAYS_INDIRECT=1
+    # 添加必要的组权限
+    group_add:
+      - video
+      - plugdev
+      - dialout
+    # 设备控制组规则（即使未来不用 privileged 也能访问）
+    device_cgroup_rules:
+      - 'c 189:* rmw'  # USB 设备
+      - 'c 81:* rmw'   # 视频设备
     network_mode: host
     tty: true
     stdin_open: true 

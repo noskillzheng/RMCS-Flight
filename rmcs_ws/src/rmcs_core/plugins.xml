@@ -17,6 +17,9 @@
   <class type = "rmcs_core::hardware::TunnelInfantry" base_class_type="rmcs_executor::Component">
     <description>Test plugin.</description>
   </class>
+  <class type="rmcs_core::hardware::MockTfProvider" base_class_type="rmcs_executor::Component">
+    <description>Static TF provider for camera and auto-aim testing.</description>
+  </class>
   <class type="rmcs_core::controller::chassis::ChassisController" base_class_type="rmcs_executor::Component">
     <description>Test plugin.</description>
   </class>

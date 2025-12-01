@@ -1,0 +1,45 @@
+
+
+rmcs_executor:
+  ros__parameters:
+    update_rate: 1000.0
+    components:
+      - rmcs_core::hardware::MockTfProvider       -> mock_tf
+      - alliance_ros_auto_aim::AllianceHikCamera   -> alliance_hik_camera
+      - alliance_ros_auto_aim::AllianceInitializer -> alliance_initializer
+      - alliance_ros_auto_aim::AllianceController  -> alliance_controller
+
+mock_tf:
+  ros__parameters:
+    base_to_gimbal_offset: [0.0, 0.0, 0.0]
+    camera_offset: [0.16, 0.0, 0.15]
+    muzzle_offset: [0.0, 0.0, 0.18]
+    initial_yaw_deg: 0.0
+    initial_pitch_deg: 0.0
+
+alliance_hik_camera:
+  ros__parameters:
+    exposure_time: 10
+
+    invert_image: false
+    gain: 16.9807
+
+alliance_initializer:
+  ros__parameters:
+    debug_mode: true
+    target_is_blue: false
+    model_path: "/workspaces/RMCS/rmcs_ws/src/alliance_ros_auto_aim/alliance_auto_aim/models/szu_identify_model.onnx"
+    device: "CPU"
+    fx: 1.722231837421459e+03
+    fy: 1.724876404292754e+03
+    cx: 7.013056440882832e+02
+    cy: 5.645821718351237e+02
+    k1: -0.064232403853946
+    k2: -0.087667493884102
+    k3: 0.792381808294582
+    bullet_speed: 26.0
+    gravity: 9.81
+    control_delay: 0.1
+
+alliance_controller:
+  ros__parameters: {}

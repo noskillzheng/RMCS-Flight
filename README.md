@@ -61,6 +61,17 @@ build-rmcs
 
 将会运行 `.script/build-rmcs` 脚本，在路径 `rmcs_ws` 下开始构建代码。
 
+如果需要在模拟环境下测试 tongji 版本自瞄，可以直接切换到我们提供的最小化配置文件：
+
+```bash
+set-robot auto-aim-test
+launch-rmcs
+```
+
+`auto-aim-test.yaml` 位于 `rmcs_bringup/config/`，只保留核心相机与弹道参数，并默认启用 `camera_mode: mock` 方便在容器内启动。若要在真机上运行，请将 `camera_mode` 切换为 `hik` 并视情况设置 `camera_device_name`；此外确保 `rmcs_tongji_auto_aim/models/` 下存在 `szu_identify_model.onnx`（可从 `alliance_auto_aim/models` 拷贝），并把 `model_path` 填写为 `models/szu_identify_model.onnx`。
+
+在仅有相机、缺乏真实云台 TF 的容器环境中，可以在 `auto_aim_controller` 参数下开启 `tf_fallback.*`（示例配置已启用），控制器会根据这些偏移与初始姿态生成静态 `rmcs_description::Tf`，一旦外部 `/tf` 就绪则自动切换。
+
 构建完毕后，基于 `clangd` 的 `C++` 代码提示将可用。此时可以正常编写代码。
 
 Note: 用于开发的所有脚本均位于 `.script` 中，参见 开发脚本手册(TODO)。
@@ -74,6 +85,16 @@ launch-rmcs
 ```
 
 在本机上运行代码。在首次运行代码前，需要调用 `set-robot` 脚本设置机器人类型。
+
+#### Hik 相机模式
+
+`auto-aim-test` 主要面向真机相机调试，默认启用 `camera_mode: hik`。要在开发容器中让 Hik SDK 正常枚举设备，必须允许容器访问宿主的 X11 授权 cookie，否则会出现 `Authorization required, but no authorization protocol specified` 与 `nRet [2147483656] (MV_E_PRECONDITION)` 错误。建议按以下步骤检查：
+
+1. 在宿主上确保 `~/.Xauthority` 存在（如无可执行 `touch ~/.Xauthority` 并重新登录图形会话，使 `xauth` 写入 cookie）。容器启动时会自动把该文件挂载到 `/tmp/.Xauthority` 并设置 `XAUTHORITY=/tmp/.Xauthority`。
+2. 如果宿主使用自定义路径（Wayland 等场景），请在 `.devcontainer/devcontainer.json` 中把 `source` 和 `XAUTHORITY` 指向实际的 cookie 文件。
+3. 如仍然无法授权，可在宿主运行 `./enable_x11_for_container.sh`（或手动 `xhost +si:localuser:root`/`ubuntu`）以允许容器用户访问 X Server。
+
+完成上述配置后，重新 `set-robot auto-aim-test && launch-rmcs`，即可在容器内直接使用 Hik 模式调试。
 
 #### 确认设备接入
 

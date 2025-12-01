@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-$ROS_DISTRO-foxglove-bridge \
     ros-$ROS_DISTRO-pcl-conversions \
     ros-$ROS_DISTRO-pcl-ros \
+    ros-$ROS_DISTRO-cv-bridge \
     libpcl-ros-dev \
     libpcl-dev \
     libgomp-dev \

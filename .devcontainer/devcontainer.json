@@ -14,15 +14,22 @@
 			"source": "/tmp/.X11-unix",
 			"target": "/tmp/.X11-unix",
 			"type": "bind"
+		},
+		{
+			"source": "${localEnv:XAUTHORITY}",
+			"target": "/tmp/.Xauthority",
+			"type": "bind"
 		}
 	],
 	"containerEnv": {
-		"DISPLAY": "${localEnv:DISPLAY}"
+		"DISPLAY": "${localEnv:DISPLAY}",
+		"XAUTHORITY": "/tmp/.Xauthority"
 	},
 	"runArgs": [
 		"--network",
 		"host"
 	],
+	"postStartCommand": "sudo chmod -R o+rw /dev/bus/usb || true && if [ -f /opt/ros/jazzy/setup.zsh ] && ! grep -Fxq 'source /opt/ros/jazzy/setup.zsh' ~/.zshrc; then echo 'source /opt/ros/jazzy/setup.zsh' >> ~/.zshrc; fi && if [ -f /opt/ros/jazzy/setup.bash ] && ! grep -Fxq 'source /opt/ros/jazzy/setup.bash' ~/.bashrc; then echo 'source /opt/ros/jazzy/setup.bash' >> ~/.bashrc; fi",
 	"customizations": {
 		"vscode": {
 			"extensions": [

@@ -1,0 +1,19 @@
+CompileFlags:
+  CompilationDatabase: build
+  Add:
+    # ROS 2 include paths
+    - -I/opt/ros/humble/include
+    - -I/opt/ros/humble/include/rclcpp
+    - -I/opt/ros/humble/include/rcl
+    # Project includes
+    - -I/home/noskillzheng/ROBOTMASTER/github-fork/RMCS-PLAYGROUND/RMCS/rmcs_ws/src/alliance_ros_auto_aim/include
+    - -I/home/noskillzheng/ROBOTMASTER/github-fork/RMCS-PLAYGROUND/RMCS/rmcs_ws/src/alliance_ros_auto_aim/alliance_auto_aim/include
+    - -I/home/noskillzheng/ROBOTMASTER/github-fork/RMCS-PLAYGROUND/RMCS/rmcs_ws/src/alliance_ros_auto_aim/alliance_auto_aim/src
+    # Install includes (rmcs_executor, rmcs_description, etc.)
+    - -I/home/noskillzheng/ROBOTMASTER/github-fork/RMCS-PLAYGROUND/RMCS/rmcs_ws/install/include
+    # OpenCV
+    - -I/usr/include/opencv4
+    # Eigen3
+    - -I/usr/include/eigen3
+  Remove:
+    - -Werror*

@@ -16,3 +16,7 @@
 [submodule "rmcs_ws/src/livox_ros_driver2"]
 	path = rmcs_ws/src/livox_ros_driver2
 	url = https://github.com/Alliance-Algorithm/livox_ros_driver2.git
+[submodule "rmcs_ws/src/alliance_ros_auto_aim/alliance_auto_aim"]
+	path = rmcs_ws/src/alliance_ros_auto_aim/alliance_auto_aim
+	url = https://github.com/noskillzheng/alliance_auto_aim.git
+	branch = v1-dev

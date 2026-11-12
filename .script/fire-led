@@ -1,0 +1,568 @@
+#!/usr/bin/env python3
+"""fire-led - Terminal RGB LED controller for RMCS (test_led) & STM32F103C8T6.
+
+Supports switching LED lighting effects by typing r, g, b (and extended effects)
+in a separate terminal:
+  1. ROS 2 mode (auto-selected when RMCS `led_controller` / `test_led` robot is running):
+       Publishes commands to `/flight/led/command` and receives hardware feedback on `/flight/led/status`.
+  2. Standalone UART mode (`/dev/ttyUSB*` or `/dev/ttyACM*`, 115200 8N1)
+  3. Standalone SWD mode (FireDAP / CMSIS-DAP `/dev/hidraw*` SRAM mailbox at 0x20000000)
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import os
+import select
+import shutil
+import subprocess
+import sys
+import termios
+import time
+import tty
+from typing import Optional
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
+FIRE_WS = os.path.join(REPO_ROOT, "fire_ws")
+TOOLS_DIR = os.path.join(FIRE_WS, "tools")
+sys.path.insert(0, TOOLS_DIR)
+
+from cmsis_dap import CmsisDapError, CmsisDapSwd, find_cmsis_dap_hidraw  # noqa: E402
+
+ESC = chr(27)
+NL = chr(10)
+CR = chr(13)
+CRLF = CR + NL
+WHITESPACE_CHARS = {CR, NL, " ", chr(9)}
+QUIT_CHARS = {"q", "Q", chr(3), chr(4)}
+
+SWD_MAILBOX_BASE = 0x20000000
+SWD_MAILBOX_MAGIC_ADDR = SWD_MAILBOX_BASE + 0x00
+SWD_MAILBOX_CMD_ADDR = SWD_MAILBOX_BASE + 0x04
+SWD_MAILBOX_STATUS_ADDR = SWD_MAILBOX_BASE + 0x08
+SWD_MAILBOX_SEQ_ADDR = SWD_MAILBOX_BASE + 0x0C
+SWD_MAILBOX_MAGIC = 0x4C454431  # "LED1"
+GPIOA_ODR_ADDR = 0x4001080C
+
+VALID_COMMANDS = set("rgbRGB" "yY" "cC" "mMpP" "wW" "fF" "kK" "eE" "oO" "01234567")
+
+EFFECT_NAMES = {
+    0: "STATIC",
+    1: "FLOW (R->Y->G->C->B->M)",
+    2: "BLINK",
+    3: "BREATH",
+}
+
+MASK_DESCRIPTIONS = {
+    0x00: ("OFF", f"{ESC}[90m○ OFF{ESC}[0m"),
+    0x01: ("RED", f"{ESC}[91m● RED (PA1){ESC}[0m"),
+    0x02: ("GREEN", f"{ESC}[92m● GREEN (PA2){ESC}[0m"),
+    0x03: ("YELLOW (R+G)", f"{ESC}[93m● YELLOW (PA1+PA2){ESC}[0m"),
+    0x04: ("BLUE", f"{ESC}[94m● BLUE (PA3){ESC}[0m"),
+    0x05: ("PURPLE (R+B)", f"{ESC}[95m● PURPLE (PA1+PA3){ESC}[0m"),
+    0x06: ("CYAN (G+B)", f"{ESC}[96m● CYAN (PA2+PA3){ESC}[0m"),
+    0x07: ("WHITE (R+G+B)", f"{ESC}[97m● WHITE (PA1+PA2+PA3){ESC}[0m"),
+}
+
+COLORIZE_PREFIXES = [
+    ("RED (PA1)", f"{ESC}[91m● RED (PA1){ESC}[0m"),
+    ("GREEN (PA2)", f"{ESC}[92m● GREEN (PA2){ESC}[0m"),
+    ("YELLOW (PA1+PA2)", f"{ESC}[93m● YELLOW (PA1+PA2){ESC}[0m"),
+    ("BLUE (PA3)", f"{ESC}[94m● BLUE (PA3){ESC}[0m"),
+    ("PURPLE (PA1+PA3)", f"{ESC}[95m● PURPLE (PA1+PA3){ESC}[0m"),
+    ("CYAN (PA2+PA3)", f"{ESC}[96m● CYAN (PA2+PA3){ESC}[0m"),
+    ("WHITE (PA1+PA2+PA3)", f"{ESC}[97m● WHITE (PA1+PA2+PA3){ESC}[0m"),
+    ("OFF", f"{ESC}[90m○ OFF{ESC}[0m"),
+]
+
+
+def colorize_status_line(text: str) -> str:
+    for plain, colored in COLORIZE_PREFIXES:
+        if text.startswith(plain + " |"):
+            return colored + text[len(plain):]
+    return text
+
+
+def maybe_bootstrap_ros_env() -> None:
+    """Ensure ROS 2 Jazzy Python environment is active when available."""
+    if os.environ.get("_FIRE_LED_ROS_BOOTSTRAPPED") == "1":
+        return
+
+    try:
+        import rclpy  # noqa: F401
+        return
+    except ImportError:
+        pass
+
+    if os.path.isfile("/opt/ros/jazzy/setup.bash"):
+        env = os.environ.copy()
+        env["_FIRE_LED_ROS_BOOTSTRAPPED"] = "1"
+        env.setdefault("ROS_AUTOMATIC_DISCOVERY_RANGE", "LOCALHOST")
+        os.execpe(
+            "bash",
+            [
+                "bash",
+                "-c",
+                'source /opt/ros/jazzy/setup.bash && exec python3 "$@"',
+                "fire-led",
+                os.path.abspath(__file__),
+                *sys.argv[1:],
+            ],
+            env,
+        )
+
+
+def maybe_forward_to_rmcs_container(force_ros: bool) -> Optional[int]:
+    """If run on host while rmcs_executor runs inside a Docker devcontainer, forward into it."""
+    if os.path.isfile("/.dockerenv") or os.path.isfile("/opt/ros/jazzy/setup.bash"):
+        return None
+    if shutil.which("pgrep") is None or shutil.which("docker") is None:
+        return None
+
+    has_executor = subprocess.run(
+        ["pgrep", "-f", "rmcs_executor"], capture_output=True, text=True
+    ).returncode == 0
+    if not has_executor and not force_ros:
+        return None
+
+    ps_res = subprocess.run(
+        ["docker", "ps", "--format", "{{.ID}} {{.Image}} {{.Names}}"],
+        capture_output=True,
+        text=True,
+    )
+    if ps_res.returncode != 0:
+        return None
+
+    container_id = None
+    for line in ps_res.stdout.splitlines():
+        if "rmcs-develop" in line:
+            container_id = line.split()[0]
+            break
+    if not container_id:
+        return None
+
+    tty_flags = ["-it"] if sys.stdin.isatty() and sys.stdout.isatty() else ["-i"]
+    cmd = [
+        "docker",
+        "exec",
+        *tty_flags,
+        "-u",
+        f"{os.getuid()}:{os.getgid()}",
+        container_id,
+        "bash",
+        "-c",
+        'export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST; source /opt/ros/jazzy/setup.bash && exec /workspaces/RMCS/.script/fire-led "$@"',
+        "fire-led",
+        *sys.argv[1:],
+    ]
+    return subprocess.run(cmd).returncode
+
+
+def auto_detect_serial() -> Optional[str]:
+    for pattern in ("/dev/ttyUSB*", "/dev/ttyACM*"):
+        ports = sorted(glob.glob(pattern))
+        if ports:
+            return ports[0]
+    return None
+
+
+class Ros2Transport:
+    """ROS 2 topic transport talking to rmcs_core::controller::flight::LedController."""
+
+    def __init__(self, cmd_topic: str, status_topic: str) -> None:
+        self.cmd_topic = cmd_topic
+        self.status_topic = status_topic
+        self._rclpy = None
+        self._node = None
+        self._pub = None
+        self._sub = None
+        self._String = None
+        self._latest_status: Optional[str] = None
+        self._status_seq = 0
+
+    @property
+    def description(self) -> str:
+        return f"ROS 2 ({self.cmd_topic} -> rmcs_core::controller::flight::LedController)"
+
+    def open(self, require_subscriber: bool = True) -> "Ros2Transport":
+        os.environ.setdefault("ROS_AUTOMATIC_DISCOVERY_RANGE", "LOCALHOST")
+        import rclpy
+        from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+        from std_msgs.msg import String
+
+        self._rclpy = rclpy
+        self._String = String
+        if not rclpy.ok():
+            rclpy.init(args=None)
+
+        self._node = rclpy.create_node(f"fire_led_cli_{os.getpid()}")
+        cmd_qos = QoSProfile(depth=16, reliability=ReliabilityPolicy.RELIABLE)
+        status_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self._pub = self._node.create_publisher(String, self.cmd_topic, cmd_qos)
+        self._sub = self._node.create_subscription(
+            String, self.status_topic, self._on_status, status_qos
+        )
+
+        deadline = time.monotonic() + (1.5 if not require_subscriber else 0.45)
+        while time.monotonic() < deadline:
+            rclpy.spin_once(self._node, timeout_sec=0.03)
+            if self._node.count_subscribers(self.cmd_topic) > 0 and self._latest_status is not None:
+                break
+
+        if self._node.count_subscribers(self.cmd_topic) == 0:
+            if require_subscriber:
+                self.close()
+                raise RuntimeError(f"No active RMCS subscriber on {self.cmd_topic}")
+
+        return self
+
+    def _on_status(self, msg) -> None:
+        self._latest_status = msg.data
+        self._status_seq += 1
+
+    def close(self) -> None:
+        if self._node is not None:
+            try:
+                self._node.destroy_node()
+            except Exception:
+                pass
+            self._node = None
+        if self._rclpy is not None and self._rclpy.ok():
+            try:
+                self._rclpy.shutdown()
+            except Exception:
+                pass
+
+    def send_command(self, ch: str) -> str:
+        prev_seq = self._status_seq
+        msg = self._String()
+        msg.data = ch[0]
+        self._pub.publish(msg)
+
+        deadline = time.monotonic() + 0.45
+        while time.monotonic() < deadline:
+            self._rclpy.spin_once(self._node, timeout_sec=0.02)
+            if self._status_seq > prev_seq and self._latest_status is not None:
+                return colorize_status_line(self._latest_status)
+
+        if self._latest_status is not None:
+            return colorize_status_line(self._latest_status)
+        return f"Published '{ch[0]}' to {self.cmd_topic}"
+
+    def read_status(self) -> str:
+        prev_seq = self._status_seq
+        msg = self._String()
+        msg.data = "status"
+        self._pub.publish(msg)
+        deadline = time.monotonic() + 0.25
+        while time.monotonic() < deadline:
+            self._rclpy.spin_once(self._node, timeout_sec=0.02)
+            if self._status_seq > prev_seq:
+                break
+        if self._latest_status:
+            return colorize_status_line(self._latest_status)
+        return f"Waiting for status on {self.status_topic}..."
+
+
+class SerialTransport:
+    """115200 8N1 UART transport using standard library termios."""
+
+    def __init__(self, port: str, baud: int = 115200) -> None:
+        self.port = port
+        self.baud = baud
+        self._fd: Optional[int] = None
+
+    @property
+    def description(self) -> str:
+        return f"UART {self.port} @ {self.baud} 8N1"
+
+    def open(self) -> "SerialTransport":
+        fd = os.open(self.port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        attrs = termios.tcgetattr(fd)
+        attrs[0] = 0
+        attrs[1] = 0
+        attrs[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+        attrs[3] = 0
+        attrs[4] = termios.B115200
+        attrs[5] = termios.B115200
+        attrs[6][termios.VMIN] = 0
+        attrs[6][termios.VTIME] = 0
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        termios.tcflush(fd, termios.TCIOFLUSH)
+        self._fd = fd
+        return self
+
+    def close(self) -> None:
+        if self._fd is not None:
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = None
+
+    def send_command(self, ch: str) -> str:
+        assert self._fd is not None
+        os.write(self._fd, ch[0].encode("ascii"))
+        deadline = time.monotonic() + 0.15
+        buf = bytearray()
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([self._fd], [], [], 0.02)
+            if ready:
+                chunk = os.read(self._fd, 256)
+                if chunk:
+                    buf.extend(chunk)
+                    if 10 in buf:
+                        break
+        reply = buf.decode("utf-8", errors="replace").strip()
+        return reply or f"Sent '{ch[0]}' via {self.port}"
+
+    def read_status(self) -> str:
+        return f"Connected over {self.description} (send r/g/b to switch LED)"
+
+
+class SwdMailboxTransport:
+    """Zero-halt SWD SRAM mailbox transport over CMSIS-DAP HID."""
+
+    def __init__(self, hidraw_path: Optional[str] = None) -> None:
+        self._dap = CmsisDapSwd(hidraw_path=hidraw_path)
+
+    @property
+    def description(self) -> str:
+        return f"SWD {self._dap.device_name} ({self._dap.hidraw_path}, zero-halt SRAM mailbox)"
+
+    def open(self) -> "SwdMailboxTransport":
+        self._dap.open()
+        magic = self._dap.read32(SWD_MAILBOX_MAGIC_ADDR)
+        if magic != SWD_MAILBOX_MAGIC:
+            self._dap.close()
+            raise CmsisDapError(
+                f"SWD mailbox magic mismatch at 0x20000000 (got 0x{magic:08X}, expected 0x{SWD_MAILBOX_MAGIC:08X}). "
+                f"Please flash fire_ws firmware first (`flash-fire` or `make -C fire_ws flash`)."
+            )
+        return self
+
+    def close(self) -> None:
+        self._dap.close()
+
+    def _format_state(self, status: int, seq: int, odr: int) -> str:
+        live_mask = status & 0x07
+        mode = (status >> 8) & 0xFF
+        last_cmd = (status >> 16) & 0xFF
+        target_mask = (status >> 24) & 0x07
+
+        display_mask = live_mask if mode == 0 else target_mask
+        _, color_badge = MASK_DESCRIPTIONS.get(display_mask, ("UNKNOWN", "UNKNOWN"))
+        mode_name = EFFECT_NAMES.get(mode, f"MODE_{mode}")
+
+        pa1_on = int((odr & (1 << 1)) == 0)
+        pa2_on = int((odr & (1 << 2)) == 0)
+        pa3_on = int((odr & (1 << 3)) == 0)
+        cmd_char = chr(last_cmd) if 32 <= last_cmd <= 126 else "?"
+        return (
+            f"{color_badge} | mode={mode_name} | cmd='{cmd_char}' | "
+            f"GPIOA(R={pa1_on},G={pa2_on},B={pa3_on}) | seq={seq}"
+        )
+
+    def send_command(self, ch: str) -> str:
+        code = ord(ch[0]) & 0xFF
+        prev_seq = self._dap.read32(SWD_MAILBOX_SEQ_ADDR)
+        self._dap.write32(SWD_MAILBOX_CMD_ADDR, code)
+
+        deadline = time.monotonic() + 0.25
+        while time.monotonic() < deadline:
+            pending = self._dap.read32(SWD_MAILBOX_CMD_ADDR)
+            if pending == 0:
+                break
+            time.sleep(0.002)
+        else:
+            raise CmsisDapError("Timed out waiting for MCU to acknowledge SWD mailbox command")
+
+        status = self._dap.read32(SWD_MAILBOX_STATUS_ADDR)
+        seq = self._dap.read32(SWD_MAILBOX_SEQ_ADDR)
+        odr = self._dap.read32(GPIOA_ODR_ADDR)
+        if seq == prev_seq and ch[0] not in ("?", "h", "H"):
+            return f"Ignored '{ch[0]}' (unsupported key) | {self._format_state(status, seq, odr)}"
+        return self._format_state(status, seq, odr)
+
+    def read_status(self) -> str:
+        status = self._dap.read32(SWD_MAILBOX_STATUS_ADDR)
+        seq = self._dap.read32(SWD_MAILBOX_SEQ_ADDR)
+        odr = self._dap.read32(GPIOA_ODR_ADDR)
+        return self._format_state(status, seq, odr)
+
+
+def print_help(transport_desc: str) -> None:
+    print("╭──────────────────────────────────────────────────────────────╮")
+    print("│  Fire_F103 RGB LED Controller (RMCS flight::LedController)   │")
+    print("├──────────────────────────────────────────────────────────────┤")
+    print("│  r : Red   (红灯 PA1)     y : Yellow (黄灯 R+G)              │")
+    print("│  g : Green (绿灯 PA2)     c : Cyan   (青灯 G+B)              │")
+    print("│  b : Blue  (蓝灯 PA3)     m : Purple (紫灯 R+B)              │")
+    print("│  w : White (白灯 R+G+B)   o / 0 : Off (关灯)                 │")
+    print("│  f : Flow  (RGB流水灯)    k : Blink  (闪烁)   e : Breath(呼吸)│")
+    print("│  s : Status (读取状态)    h / ? : Help        q : Quit (退出) │")
+    print("╰──────────────────────────────────────────────────────────────╯")
+    print(f"Connected via: {transport_desc}")
+
+
+def open_transport(args: argparse.Namespace):
+    if args.port:
+        return SerialTransport(args.port).open()
+    if args.hidraw:
+        return SwdMailboxTransport(args.hidraw).open()
+    if args.ros:
+        return Ros2Transport(args.cmd_topic, args.status_topic).open(require_subscriber=False)
+
+    # Prefer ROS 2 topic control when RMCS led_controller (test_led robot) is active
+    if not args.direct and not args.swd:
+        try:
+            import rclpy  # noqa: F401
+            return Ros2Transport(args.cmd_topic, args.status_topic).open(require_subscriber=True)
+        except Exception:
+            pass
+
+    serial_port = auto_detect_serial()
+    if serial_port and not args.swd:
+        return SerialTransport(serial_port).open()
+
+    if find_cmsis_dap_hidraw():
+        return SwdMailboxTransport().open()
+
+    raise RuntimeError(
+        "No active RMCS led_controller node, serial port (/dev/ttyUSB*), or CMSIS-DAP (/dev/hidraw*) found."
+    )
+
+
+def run_interactive(transport) -> int:
+    print_help(transport.description)
+    print(f"Current: {transport.read_status()}{NL}")
+
+    if not sys.stdin.isatty():
+        for line in sys.stdin:
+            for ch in line:
+                if ch in WHITESPACE_CHARS:
+                    continue
+                if ch in QUIT_CHARS:
+                    return 0
+                if ch in ("s", "S"):
+                    print(transport.read_status(), flush=True)
+                elif ch in ("h", "H", "?"):
+                    print_help(transport.description)
+                elif ch in VALID_COMMANDS:
+                    print(f"[{ch}] -> {transport.send_command(ch)}", flush=True)
+        return 0
+
+    fd = sys.stdin.fileno()
+    old_attrs = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        sys.stdout.write(f"Press key (r/g/b/y/c/m/w/f/k/e/o, q to quit) > {CRLF}")
+        sys.stdout.flush()
+        while True:
+            ready, _, _ = select.select([fd], [], [], 0.2)
+            if not ready:
+                continue
+            ch = os.read(fd, 1).decode("utf-8", errors="ignore")
+            if not ch:
+                break
+            if ch in QUIT_CHARS:
+                sys.stdout.write(f"{CRLF}Exiting fire-led.{CRLF}")
+                sys.stdout.flush()
+                break
+            if ch in WHITESPACE_CHARS:
+                continue
+            if ch in ("h", "H", "?"):
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+                print_help(transport.description)
+                tty.setraw(fd)
+                continue
+            if ch in ("s", "S"):
+                msg = transport.read_status()
+                sys.stdout.write(f"[status] {msg}{CRLF}")
+                sys.stdout.flush()
+                continue
+            if ch in VALID_COMMANDS:
+                msg = transport.send_command(ch)
+                sys.stdout.write(f"[{ch}] -> {msg}{CRLF}")
+                sys.stdout.flush()
+            else:
+                sys.stdout.write(f"[?] Unknown key {ch!r} (press h for help, q to quit){CRLF}")
+                sys.stdout.flush()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Switch STM32F103C8T6 RGB LED effects via RMCS test_led robot or direct hardware"
+    )
+    parser.add_argument(
+        "commands",
+        nargs="*",
+        help="Optional command(s) to send immediately (e.g. r, g, b, f, k, e, o, status); omit for interactive mode",
+    )
+    parser.add_argument("--ros", action="store_true", help="Force ROS 2 topic control mode")
+    parser.add_argument("--direct", action="store_true", help="Bypass ROS 2 and access hardware directly")
+    parser.add_argument("--cmd-topic", default="/flight/led/command", help="ROS 2 LED command topic")
+    parser.add_argument("--status-topic", default="/flight/led/status", help="ROS 2 LED status topic")
+    parser.add_argument("-p", "--port", help="Explicit UART device (e.g. /dev/ttyUSB0)")
+    parser.add_argument("--swd", action="store_true", help="Force direct SWD CMSIS-DAP mailbox transport")
+    parser.add_argument("--hidraw", help="Explicit /dev/hidrawN path for CMSIS-DAP")
+    args = parser.parse_args()
+
+    if not args.direct and not args.swd and not args.port and not args.hidraw:
+        forwarded_rc = maybe_forward_to_rmcs_container(force_ros=args.ros)
+        if forwarded_rc is not None:
+            return forwarded_rc
+        maybe_bootstrap_ros_env()
+
+    try:
+        transport = open_transport(args)
+    except Exception as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        if not args.commands:
+            return run_interactive(transport)
+
+        for token in args.commands:
+            low = token.strip().lower()
+            if low == "status":
+                print(transport.read_status())
+                continue
+            if low == "off":
+                token = "o"
+            elif low == "red":
+                token = "r"
+            elif low == "green":
+                token = "g"
+            elif low == "blue":
+                token = "b"
+            elif low == "flow":
+                token = "f"
+            elif low == "blink":
+                token = "k"
+            elif low == "breath":
+                token = "e"
+
+            for ch in token:
+                if ch in VALID_COMMANDS:
+                    print(f"[{ch}] -> {transport.send_command(ch)}")
+                else:
+                    print(f"✗ Unsupported command: {ch!r}", file=sys.stderr)
+                    return 2
+        return 0
+    finally:
+        transport.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

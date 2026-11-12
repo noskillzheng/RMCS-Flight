@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+FIRE_WS="${REPO_ROOT}/fire_ws"
+BUILD_DIR="${FIRE_WS}/build"
+
+if [[ ! -d "${FIRE_WS}" ]]; then
+    echo "> ERROR: Firmware workspace not found: ${FIRE_WS}" >&2
+    exit 1
+fi
+
+[[ -x /opt/cmake/bin/cmake ]] && export PATH="/opt/cmake/bin:${PATH}"
+
+if ! command -v arm-none-eabi-gcc &>/dev/null; then
+    if [[ -f "${BUILD_DIR}/Fire_F103.elf" && -f "${BUILD_DIR}/Fire_F103.bin" ]]; then
+        newest_src="$(find "${FIRE_WS}/Core" "${FIRE_WS}/CMakeLists.txt" "${FIRE_WS}/STM32F103C8Tx_FLASH.ld" -type f -newer "${BUILD_DIR}/Fire_F103.elf" 2>/dev/null | head -n 1 || true)"
+        if [[ -z "${newest_src}" ]]; then
+            echo "> arm-none-eabi-gcc not in current container PATH; prebuilt ${BUILD_DIR}/Fire_F103.elf is up to date."
+            exit 0
+        fi
+    fi
+    echo "> ERROR: arm-none-eabi-gcc not found in PATH." >&2
+    echo "> Run on host or install toolchain in container: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi" >&2
+    exit 1
+fi
+
+# Reconfigure cleanly if build directory was created from a different mount path (host vs devcontainer)
+if [[ -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
+    cached_src="$(grep -E '^CMAKE_HOME_DIRECTORY:INTERNAL=' "${BUILD_DIR}/CMakeCache.txt" | cut -d= -f2- || true)"
+    if [[ -n "${cached_src}" && "${cached_src}" != "${FIRE_WS}" ]]; then
+        rm -rf "${BUILD_DIR}"
+    fi
+fi
+
+generator_args=()
+if command -v ninja &>/dev/null; then
+    generator_args=(-G Ninja)
+fi
+
+if [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
+    cmake -S "${FIRE_WS}" -B "${BUILD_DIR}" "${generator_args[@]}" -DCMAKE_TOOLCHAIN_FILE="${FIRE_WS}/cmake/gcc-arm-none-eabi.cmake"
+fi
+
+cmake --build "${BUILD_DIR}" "$@"

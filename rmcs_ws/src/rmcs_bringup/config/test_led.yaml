@@ -1,0 +1,16 @@
+rmcs_executor:
+  ros__parameters:
+    update_rate: 1000.0
+    components:
+      - rmcs_core::controller::flight::LedController -> led_controller
+
+led_controller:
+  ros__parameters:
+    # 传输方式: auto (优先探测串口, 否则走 FireDAP/CMSIS-DAP SWD) | swd | uart
+    transport: "auto"
+    serial_port: ""
+    baudrate: 115200
+    hidraw_path: ""
+    command_topic: "/flight/led/command"
+    status_topic: "/flight/led/status"
+    initial_command: "o"

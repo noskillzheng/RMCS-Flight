@@ -78,4 +78,8 @@ develop_ws
 .claude/
 .codex/
 .mimo/
-CLAUDE.md
+CLAUDE.mdg
+
+# Hardware schematics and reference files
+原理图_尺寸图_规格书_IO表格_封装库/
+

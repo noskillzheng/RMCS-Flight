@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""flash-fire - Build (if needed) and flash Fire_F103 firmware to STM32F103C8T6.
+
+Supports:
+  1. OpenOCD + CMSIS-DAP / ST-Link (preferred when openocd is installed)
+  2. Pure-Python CMSIS-DAP HID SWD flasher (/dev/hidraw*, works inside Docker devcontainer)
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
+FIRE_WS = os.path.join(REPO_ROOT, "fire_ws")
+TOOLS_DIR = os.path.join(FIRE_WS, "tools")
+sys.path.insert(0, TOOLS_DIR)
+
+from cmsis_dap import CmsisDapError, CmsisDapSwd, find_cmsis_dap_hidraw  # noqa: E402
+
+NL = chr(10)
+
+
+def flash_with_openocd(elf_path: str, interface_cfg: str) -> bool:
+    openocd = shutil.which("openocd")
+    if not openocd:
+        return False
+
+    cmd = [
+        openocd,
+        "-f",
+        f"interface/{interface_cfg}.cfg",
+        "-f",
+        "target/stm32f1x.cfg",
+        "-c",
+        f'program "{elf_path}" verify reset exit',
+    ]
+    print(f"▸ Flashing via OpenOCD ({interface_cfg}): {os.path.relpath(elf_path, REPO_ROOT)}")
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode == 0:
+        print("✓ Flash & verify succeeded (OpenOCD).")
+        return True
+
+    stderr_tail = NL.join((res.stderr or res.stdout).strip().splitlines()[-8:])
+    print(f"! OpenOCD ({interface_cfg}) returned {res.returncode}:{NL}{stderr_tail}", file=sys.stderr)
+    return False
+
+
+def flash_with_cmsis_dap_hidraw(bin_path: str, hidraw_path: str | None = None) -> None:
+    with open(bin_path, "rb") as f:
+        image = f.read()
+
+    with CmsisDapSwd(hidraw_path=hidraw_path) as dap:
+        print(
+            f"▸ Flashing via CMSIS-DAP HID ({dap.device_name} @ {dap.hidraw_path}, "
+            f"DP IDCODE=0x{dap.dp_idcode:08X}, {len(image)} bytes)..."
+        )
+        dap.flash_binary(image)
+    print("✓ Flash, verify & reset succeeded (CMSIS-DAP HID).")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Flash Fire_F103 RGB firmware to STM32F103C8T6")
+    parser.add_argument("--no-build", action="store_true", help="Skip running build-fire before flashing")
+    parser.add_argument(
+        "--backend",
+        choices=["auto", "openocd", "hidraw"],
+        default="auto",
+        help="Flashing backend (default: auto)",
+    )
+    parser.add_argument("--hidraw", help="Explicit /dev/hidrawN path for CMSIS-DAP backend")
+    args = parser.parse_args()
+
+    if not args.no_build:
+        build_script = os.path.join(SCRIPT_DIR, "build-fire")
+        rc = subprocess.run([build_script]).returncode
+        if rc != 0:
+            return rc
+
+    elf_path = os.path.join(FIRE_WS, "build", "Fire_F103.elf")
+    bin_path = os.path.join(FIRE_WS, "build", "Fire_F103.bin")
+    if not os.path.isfile(elf_path) or not os.path.isfile(bin_path):
+        print(f"✗ Firmware artifacts not found in {os.path.join(FIRE_WS, 'build')}", file=sys.stderr)
+        return 1
+
+    if args.backend in ("auto", "openocd") and shutil.which("openocd") and not args.hidraw:
+        if flash_with_openocd(elf_path, "cmsis-dap"):
+            return 0
+        if args.backend == "openocd":
+            return 1
+        print("▸ Falling back to direct CMSIS-DAP hidraw programmer...")
+
+    found = (args.hidraw, args.hidraw) if args.hidraw else find_cmsis_dap_hidraw()
+    if not found:
+        print(
+            "✗ No CMSIS-DAP debugger detected. Ensure FireDAP / SWD debugger is connected.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        flash_with_cmsis_dap_hidraw(bin_path, hidraw_path=args.hidraw)
+        return 0
+    except CmsisDapError as exc:
+        print(f"✗ Flash failed: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
